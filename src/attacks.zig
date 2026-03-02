@@ -48,3 +48,22 @@ pub fn kingAttacks(sq: u6) Bitboard {
     attacks |= (king_bb << 8) | (king_bb >> 8);
     return attacks;
 }
+
+pub fn hyperbolaQuintessence(piece_bb: Bitboard, occupancy: Bitboard, attack_mask: Bitboard) Bitboard {
+    const occupancy_mask = occupancy & attack_mask;
+    const forward = occupancy_mask -% (piece_bb *% 2);
+    const backward = @bitReverse(@bitReverse(occupancy_mask) -% (@bitReverse(piece_bb) *% 2));
+    return (forward ^ backward) & attack_mask;
+}
+
+pub fn bishopAttacks(square: u6, occupancy: Bitboard) Bitboard {
+    const piece_bb = @as(u64, 1) << square;
+    return hyperbolaQuintessence(piece_bb, occupancy, utils.maskDiag(square)) | hyperbolaQuintessence(piece_bb, occupancy, utils.maskAntiDiag(square));
+}
+
+// pub fn initTables() void {
+//     var offset: usize = 0;
+//     for (0..63) |sq| {
+//        const mask = hyperbolaQuintessence(@as(u64, 1) << sq, 0, )
+//     }
+// }

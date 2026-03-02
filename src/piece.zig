@@ -10,19 +10,6 @@ pub const PieceType = enum(u8) {
 };
 
 pub const Piece = packed struct(u8) {
-    pub inline fn new(piece_color: Color, piece_type: PieceType) Piece {
-        return Piece{
-            .pawn = piece_type == PieceType.Pawn,
-            .knight = piece_type == PieceType.Knight,
-            .bishop = piece_type == PieceType.Bishop,
-            .rook = piece_type == PieceType.Rook,
-            .queen = piece_type == PieceType.Queen,
-            .king = piece_type == PieceType.King,
-            .white = piece_color == Color.White,
-            .black = piece_color == Color.Black,
-        };
-    }
-
     pub inline fn color(self: Piece) Color {
         if (self.white) return Color.White;
         if (self.black) return Color.Black;
@@ -48,3 +35,16 @@ pub const Piece = packed struct(u8) {
     queen: bool = false,
     king: bool = false,
 };
+
+pub fn makePiece(piece_color: Color, piece_type: PieceType) Piece {
+    return .{
+        .pawn = piece_type == PieceType.Pawn,
+        .knight = piece_type == PieceType.Knight,
+        .bishop = piece_type == PieceType.Bishop,
+        .rook = piece_type == PieceType.Rook,
+        .queen = piece_type == PieceType.Queen,
+        .king = piece_type == PieceType.King,
+        .white = piece_color == Color.White,
+        .black = piece_color == Color.Black,
+    };
+}

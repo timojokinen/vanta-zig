@@ -92,11 +92,47 @@ pub const RANKS: [8]u64 = .{
     0xff00000000000000,
 };
 
+pub const MAIN_DIAG: u64 = 0x8040201008040201;
+pub const MAIN_ANTIDIAG: u64 = 0x0102040810204080;
+
+pub const DIAGS: [8]u64 = .{};
+
 pub fn relativeRank(rank: u8, color: Color) Bitboard {
     return if (color == Color.White)
         RANKS[@as(usize, rank)]
     else
         RANKS[7 - @as(usize, rank)];
+}
+
+pub fn rankFromSquare(square: u6) u6 {
+    return square >> 3;
+}
+
+pub fn fileFromSquare(square: u6) u6 {
+    return square & 7;
+}
+
+pub fn maskFile(square: u6) Bitboard {
+    return FILES[square & 7];
+}
+
+pub fn maskRank(square: u6) Bitboard {
+    return RANKS[square >> 3];
+}
+
+pub fn maskDiag(square: u6) Bitboard {
+    const bb: Bitboard = MAIN_DIAG;
+    const rank = rankFromSquare(square);
+    const file = fileFromSquare(square);
+    return if (rank > file) bb << (rank - file) * 8 else bb >> (file - rank) * 8;
+}
+
+pub fn maskAntiDiag(square: u6) Bitboard {
+    const bb: Bitboard = MAIN_ANTIDIAG;
+    const rank = rankFromSquare(square);
+    const file = fileFromSquare(square);
+    const delta = @as(i8, rank + file) - 7;
+    return if (delta < 0) bb >> @as(u6, @intCast(-delta)) * 8 else bb << @as(u6, @intCast(delta)) * 8;
 }
 
 pub fn combineBitboards(bbs: []const Bitboard) Bitboard {
@@ -105,4 +141,12 @@ pub fn combineBitboards(bbs: []const Bitboard) Bitboard {
         combined_bb |= bb;
     }
     return combined_bb;
+}
+
+pub fn pext(src: u64, mask: u64) u64 {
+    return asm ("pext %[mask], %[src], %[out]"
+        : [out] "=r" (-> u64),
+        : [src] "r" (src),
+          [mask] "r" (mask),
+    );
 }

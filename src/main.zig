@@ -1,5 +1,6 @@
 const std = @import("std");
 const attacks = @import("attacks.zig");
+const tables = @import("tables.zig");
 
 const fen = @import("fen.zig");
 const utils = @import("utils.zig");
@@ -10,4 +11,5 @@ pub fn main() !void {
     const fen_string = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
     const position = try Position.fromFEN(fen_string);
     try position.generateMoves();
+    tables.initTables();
 }

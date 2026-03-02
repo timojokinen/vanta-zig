@@ -5,6 +5,7 @@ const pieceToSymbol = @import("utils.zig").pieceToSymbol;
 const san2idx = @import("utils.zig").san2idx;
 const printBoard = @import("utils.zig").printBoard;
 const Piece = @import("piece.zig").Piece;
+const makePiece = @import("piece.zig").makePiece;
 
 const FENParsingError = error{
     InvalidPartCount,
@@ -43,19 +44,19 @@ pub fn parseFen(fen: []const u8) !BoardState {
                 col += empty_squares;
                 continue;
             }
-            const piece = switch (char) {
-                'P' => Piece.new(.White, .Pawn),
-                'N' => Piece.new(.White, .Knight),
-                'B' => Piece.new(.White, .Bishop),
-                'R' => Piece.new(.White, .Rook),
-                'Q' => Piece.new(.White, .Queen),
-                'K' => Piece.new(.White, .King),
-                'p' => Piece.new(.Black, .Pawn),
-                'n' => Piece.new(.Black, .Knight),
-                'b' => Piece.new(.Black, .Bishop),
-                'r' => Piece.new(.Black, .Rook),
-                'q' => Piece.new(.Black, .Queen),
-                'k' => Piece.new(.Black, .King),
+            const piece: Piece = switch (char) {
+                'P' => makePiece(.White, .Pawn),
+                'N' => makePiece(.White, .Knight),
+                'B' => makePiece(.White, .Bishop),
+                'R' => makePiece(.White, .Rook),
+                'Q' => makePiece(.White, .Queen),
+                'K' => makePiece(.White, .King),
+                'p' => makePiece(.Black, .Pawn),
+                'n' => makePiece(.Black, .Knight),
+                'b' => makePiece(.Black, .Bishop),
+                'r' => makePiece(.Black, .Rook),
+                'q' => makePiece(.Black, .Queen),
+                'k' => makePiece(.Black, .King),
                 else => {
                     std.debug.print("Invalid character in FEN: {c}\n", .{char});
                     return FENParsingError.InvalidPartCount;
