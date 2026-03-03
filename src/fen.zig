@@ -22,7 +22,7 @@ pub const BoardState = struct {
     mat_8x8: [8][8]u8,
     side_to_move: Color,
     castling_rights: CastlingRights,
-    en_passant_square: ?u8,
+    en_passant_square: ?u6,
     halfmove_clock: u32,
     fullmove_number: u32,
 };
@@ -86,7 +86,7 @@ pub fn parseFen(fen: []const u8) !BoardState {
     };
 
     const en_passant_target = iterator.next() orelse return FENParsingError.InvalidPartCount;
-    const en_passant_sqidx: ?u8 = if (en_passant_target[0] != '-')
+    const en_passant_sqidx: ?u6 = if (en_passant_target[0] != '-')
         try san2idx(en_passant_target)
     else
         null;

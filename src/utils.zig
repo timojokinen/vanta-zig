@@ -59,7 +59,7 @@ pub fn printBitboard(bb: Bitboard) void {
     std.debug.print("    a   b   c   d   e   f   g   h\n\n", .{});
 }
 
-pub fn san2idx(san: []const u8) !u8 {
+pub fn san2idx(san: []const u8) !u6 {
     if (san.len != 2) return error.InvalidSAN;
     const file = san[0];
     const rank = san[1];
@@ -67,7 +67,7 @@ pub fn san2idx(san: []const u8) !u8 {
     if (rank < '1' or rank > '8') return error.InvalidSAN;
     const file_index = file - 'a';
     const rank_index = rank - '1';
-    return @as(u8, rank_index * 8 + file_index);
+    return @intCast(rank_index * 8 + file_index);
 }
 
 pub const FILES: [8]u64 = .{
@@ -95,7 +95,7 @@ pub const RANKS: [8]u64 = .{
 pub const MAIN_DIAG: u64 = 0x8040201008040201;
 pub const MAIN_ANTIDIAG: u64 = 0x0102040810204080;
 
-pub const DIAGS: [8]u64 = .{};
+pub const CASTLING_SQUARES: [4]u64 = .{ 0b11 << 5, 0b11 << 1, 0, 0 };
 
 pub fn relativeRank(rank: u8, color: Color) Bitboard {
     return if (color == Color.White)

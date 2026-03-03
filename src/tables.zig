@@ -16,9 +16,40 @@ var king_masks: [64]u64 = undefined;
 var white_pawns_masks: [64]u64 = undefined;
 var black_pawns_masks: [64]u64 = undefined;
 
+pub fn lookupPawnAttacks(sq: u6, color: utils.Color) utils.Bitboard {
+    return switch (color) {
+        utils.Color.White => white_pawns_masks[@intCast(sq)],
+        utils.Color.Black => black_pawns_masks[@intCast(sq)],
+    };
+}
+
+pub fn lookupKnightAttacks(sq: u6) utils.Bitboard {
+    return knight_masks[@intCast(sq)];
+}
+
+pub fn lookupKingAttacks(sq: u6) utils.Bitboard {
+    return king_masks[@intCast(sq)];
+}
+
+pub fn lookupBishopAttacks(sq: u6, occupancy: utils.Bitboard) utils.Bitboard {
+    const index = utils.pext(occupancy, bishop_masks[@intCast(sq)]);
+    const offset = bishop_offsets[@intCast(sq)];
+    return bishop_table[offset + index];
+}
+
+pub fn lookupRookAttacks(sq: u6, occupancy: utils.Bitboard) utils.Bitboard {
+    const index = utils.pext(occupancy, rook_masks[@intCast(sq)]);
+    const offset = rook_offsets[@intCast(sq)];
+    return rook_table[offset + index];
+}
+
+pub fn lookupQueenAttacks(sq: u6, occupancy: utils.Bitboard) utils.Bitboard {
+    return lookupBishopAttacks(sq, occupancy) | lookupRookAttacks(sq, occupancy);
+}
+
 pub fn initTables() void {
     var curr_bishop_offset: usize = 0;
-    // var curr_rook_offset = 0;
+    var curr_rook_offset: usize = 0;
     // bishop masks
     for (0..64) |sq| {
         const edges =
@@ -33,21 +64,19 @@ pub fn initTables() void {
         const bishop_mask = (diag | anti_diag) & ~(edges) & ~(piece_bb);
         bishop_masks[sq] = bishop_mask;
 
-        // BISHOP TABLE
+        // BISHOP ATTACKS
         const relevant_bishop_bits = @popCount(bishop_mask);
-        const table_size = @as(u64, 1) << @intCast(relevant_bishop_bits);
+        const bishop_table_size = @as(u64, 1) << @intCast(relevant_bishop_bits);
         bishop_offsets[sq] = curr_bishop_offset;
-
         var bishop_subset: u64 = 0;
         while (true) {
             const bishop_attacks = attacks.bishopAttacks(@intCast(sq), bishop_subset);
-            utils.printBitboard(bishop_attacks);
             const index = utils.pext(bishop_subset, bishop_mask);
             bishop_table[curr_bishop_offset + index] = bishop_attacks;
             bishop_subset = (bishop_subset -% bishop_mask) & bishop_mask;
             if (bishop_subset == 0) break;
         }
-        curr_bishop_offset += table_size;
+        curr_bishop_offset += bishop_table_size;
 
         // ROOK MASKS
         const rank = utils.maskRank(@intCast(sq));
@@ -55,9 +84,23 @@ pub fn initTables() void {
         const rook_mask = (rank | file) & ~(edges) & ~(piece_bb);
         rook_masks[sq] = rook_mask;
 
-        knight_masks[sq] = attacks.knightAttacks(@intCast(6));
-        king_masks[sq] = attacks.kingAttacks(@intCast(6));
-        white_pawns_masks[sq] = attacks.pawnAttacks(@intCast(6), utils.Color.White);
-        black_pawns_masks[sq] = attacks.pawnAttacks(@intCast(6), utils.Color.Black);
+        // ROOK ATTACKS
+        const relevant_rook_bits = @popCount(rook_mask);
+        const rook_table_size = @as(u64, 1) << @intCast(relevant_rook_bits);
+        rook_offsets[sq] = curr_rook_offset;
+        var rook_subset: u64 = 0;
+        while (true) {
+            const rook_attacks = attacks.rookAttacks(@intCast(sq), rook_subset);
+            const index = utils.pext(rook_subset, rook_mask);
+            rook_table[curr_rook_offset + index] = rook_attacks;
+            rook_subset = (rook_subset -% rook_mask) & rook_mask;
+            if (rook_subset == 0) break;
+        }
+        curr_rook_offset += rook_table_size;
+
+        knight_masks[sq] = attacks.knightAttacks(@intCast(sq));
+        king_masks[sq] = attacks.kingAttacks(@intCast(sq));
+        white_pawns_masks[sq] = attacks.pawnAttacks(@intCast(sq), utils.Color.White);
+        black_pawns_masks[sq] = attacks.pawnAttacks(@intCast(sq), utils.Color.Black);
     }
 }
