@@ -1,4 +1,5 @@
 const std = @import("std");
+const tables = @import("tables.zig");
 const Piece = @import("piece.zig").Piece;
 
 pub const Color = enum(u1) {

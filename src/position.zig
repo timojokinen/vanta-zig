@@ -42,14 +42,97 @@ pub const Position = struct {
     pub fn generateMoves(self: Position) !void {
         const ally_color: Color = self.board_state.side_to_move;
         const color_offset: usize = if (ally_color == Color.Black) 6 else 0;
+        const opp_color_offset: usize = if (ally_color == Color.Black) 0 else 6;
         const all_pieces_bb: Bitboard = utils.combineBitboards(&self.bbs);
         const ally_pieces_bb: Bitboard = utils.combineBitboards(self.bbs[color_offset..][0..6]);
         const opp_pieces_bb: Bitboard = utils.combineBitboards(self.bbs[(color_offset + 6) % 12 ..][0..6]);
         const king_bb: Bitboard = self.bbs[@intFromEnum(PieceType.King) + color_offset];
+        const king_sq: u6 = @intCast(@ctz(king_bb));
         const opp_attacks: Bitboard = attacks.pieceAttacks(ally_color.opp(), self.bbs, all_pieces_bb ^ king_bb);
+        const king_attackers: Bitboard = attacks.squareAttackers(king_sq, ally_color.opp(), self.bbs, all_pieces_bb);
+        const checkers_count = @popCount(king_attackers);
 
         var move_list_buf: [256]Move = undefined;
         var move_list: std.ArrayListUnmanaged(Move) = .initBuffer(&move_list_buf);
+
+        {
+            const att: Bitboard = tables.lookupKingAttacks(king_sq) & ~ally_pieces_bb & ~opp_attacks;
+
+            var quiet: Bitboard = att & ~opp_pieces_bb;
+            var capture: Bitboard = att & opp_pieces_bb;
+
+            while (quiet != 0) : (quiet &= quiet - 1) {
+                const to_sq: u6 = @intCast(@ctz(quiet));
+                move_list.appendAssumeCapacity(.{ .flags = MoveFlags.QUIET, .from_sq = king_sq, .to_sq = to_sq });
+            }
+
+            while (capture != 0) : (capture &= capture - 1) {
+                const to_sq: u6 = @intCast(@ctz(capture));
+                move_list.appendAssumeCapacity(.{ .flags = MoveFlags.CAPTURE, .from_sq = king_sq, .to_sq = to_sq });
+            }
+
+            const wk_attacked = 0b111 << 4;
+            const wk_blocked = 0b11 << 5;
+            const wq_attacked = 0b111 << 2;
+            const wq_blocked = 0b111 << 1;
+            const bk_attacked = 0b111 << 60;
+            const bk_blocked = 0b11 << 61;
+            const bq_attacked = 0b111 << 58;
+            const bq_blocked = 0b111 << 57;
+
+            if (ally_color == Color.White and
+                self.board_state.castling_rights.white_kingside and
+                wk_attacked & opp_attacks == 0 and
+                wk_blocked & all_pieces_bb == 0)
+            {
+                move_list.appendAssumeCapacity(.{ .flags = MoveFlags.KING_CASTLE, .from_sq = king_sq, .to_sq = 6 });
+            }
+
+            if (ally_color == Color.White and
+                self.board_state.castling_rights.white_queenside and
+                wq_attacked & opp_attacks == 0 and
+                wq_blocked & all_pieces_bb == 0)
+            {
+                move_list.appendAssumeCapacity(.{ .flags = MoveFlags.QUEEN_CASTLE, .from_sq = king_sq, .to_sq = 2 });
+            }
+
+            if (ally_color == Color.Black and
+                self.board_state.castling_rights.black_kingside and
+                bk_attacked & opp_attacks == 0 and
+                bk_blocked & all_pieces_bb == 0)
+            {
+                move_list.appendAssumeCapacity(.{ .flags = MoveFlags.KING_CASTLE, .from_sq = king_sq, .to_sq = 62 });
+            }
+
+            if (ally_color == Color.Black and
+                self.board_state.castling_rights.black_queenside and
+                bq_attacked & opp_attacks == 0 and
+                bq_blocked & all_pieces_bb == 0)
+            {
+                move_list.appendAssumeCapacity(.{ .flags = MoveFlags.QUEEN_CASTLE, .from_sq = king_sq, .to_sq = 58 });
+            }
+        }
+
+        if (checkers_count >= 2) return;
+
+        const rook_queen_pinners = attacks.xRayRookAttacks(@intCast(@ctz(king_bb)), all_pieces_bb, ally_pieces_bb) & (self.bbs[@intFromEnum(PieceType.Queen) + opp_color_offset] | self.bbs[@intFromEnum(PieceType.Rook) + opp_color_offset]);
+        const bishop_queen_pinners = attacks.xRayBishopAttacks(@intCast(@ctz(king_bb)), all_pieces_bb, ally_pieces_bb) & (self.bbs[@intFromEnum(PieceType.Queen) + opp_color_offset] | self.bbs[@intFromEnum(PieceType.Bishop) + opp_color_offset]);
+
+        var pinned_pieces: Bitboard = 0;
+        var pinner = rook_queen_pinners;
+        while (pinner != 0) : (pinner &= pinner - 1) {
+            const pinner_sq: u6 = @intCast(@ctz(pinner));
+            pinned_pieces |= tables.lookupSquaresBetween(pinner_sq, king_sq) & ally_pieces_bb;
+        }
+
+        pinner = bishop_queen_pinners;
+        while (pinner != 0) : (pinner &= pinner - 1) {
+            const pinner_sq: u6 = @intCast(@ctz(pinner));
+            pinned_pieces |= tables.lookupSquaresBetween(pinner_sq, king_sq) & ally_pieces_bb;
+        }
+
+        const checker_sq: ?u6 = if (checkers_count == 1) @intCast(@ctz(king_attackers)) else null;
+        const check_mask: Bitboard = if (checker_sq) |sq| tables.lookupSquaresBetween(sq, king_sq) | (@as(u64, 1) << sq) else ~@as(Bitboard, 0);
 
         var pawns_bb: Bitboard = self.bbs[@intFromEnum(PieceType.Pawn) + color_offset];
         const pawn_direction: i8 = if (ally_color == Color.White) 1 else -1;
@@ -57,11 +140,19 @@ pub const Position = struct {
 
         while (pawns_bb != 0) : (pawns_bb &= pawns_bb - 1) {
             const from_sq: u6 = @intCast(@ctz(pawns_bb));
+            const raw_att: Bitboard = tables.lookupPawnAttacks(from_sq, ally_color);
+            const is_pinned: bool = pinned_pieces & @as(u64, 1) << from_sq != 0;
+            const pawn_rook_att = tables.lookupRookAttacks(from_sq, all_pieces_bb);
+            const pawn_bishop_att = tables.lookupBishopAttacks(from_sq, all_pieces_bb);
+            const rook_pinner = pawn_rook_att & rook_queen_pinners;
+            const bishop_pinner = pawn_bishop_att & bishop_queen_pinners;
+            const pin_mask = if (!is_pinned) ~@as(Bitboard, 0) else if (rook_pinner != 0) tables.lookupSquaresBetween(king_sq, @intCast(@ctz(rook_pinner))) | rook_pinner else if (bishop_pinner != 0) tables.lookupSquaresBetween(king_sq, @intCast(@ctz(bishop_pinner))) | bishop_pinner else 0;
+
             const from_bb: Bitboard = @as(u64, 1) << from_sq;
             var to_sq: u6 = @intCast(@as(i8, from_sq) + 8 * pawn_direction);
             const to_bb: Bitboard = @as(u64, 1) << to_sq;
 
-            if (to_bb & ~all_pieces_bb != 0) {
+            if (to_bb & ~all_pieces_bb & pin_mask & check_mask != 0) {
                 if (to_bb & promotion_rank != 0) {
                     move_list.appendAssumeCapacity(.{ .flags = MoveFlags.KNIGHT_PROMOTION, .to_sq = to_sq, .from_sq = from_sq });
                     move_list.appendAssumeCapacity(.{ .flags = MoveFlags.BISHOP_PROMOTION, .to_sq = to_sq, .from_sq = from_sq });
@@ -72,12 +163,13 @@ pub const Position = struct {
                 }
 
                 to_sq = @intCast(@as(i8, to_sq) + 8 * pawn_direction);
-                if (@as(u64, 1) << to_sq & ~all_pieces_bb != 0 and from_bb & utils.relativeRank(1, ally_color) != 0) {
+                if (@as(u64, 1) << to_sq & ~all_pieces_bb & pin_mask & check_mask != 0 and from_bb & utils.relativeRank(1, ally_color) != 0) {
                     move_list.appendAssumeCapacity(.{ .flags = MoveFlags.DOUBLE_PAWN_PUSH, .from_sq = from_sq, .to_sq = to_sq });
                 }
             }
 
-            const att: Bitboard = tables.lookupPawnAttacks(from_sq, ally_color) & opp_pieces_bb;
+            const att: Bitboard = raw_att & opp_pieces_bb & pin_mask & check_mask;
+
             var captures: Bitboard = att & ~promotion_rank;
             var prom_captures: Bitboard = att & promotion_rank;
 
@@ -93,17 +185,24 @@ pub const Position = struct {
             }
 
             if (self.board_state.en_passant_square) |ep_sq| {
-                const raw_att = tables.lookupPawnAttacks(from_sq, ally_color);
-                if (raw_att & (@as(u64, 1) << ep_sq) != 0) {
-                    move_list.appendAssumeCapacity(.{ .flags = MoveFlags.EP_CAPTURE, .from_sq = from_sq, .to_sq = ep_sq });
+                const ep_att = raw_att & (@as(u64, 1) << ep_sq) & pin_mask;
+                const captured_sq: u6 = @intCast(@as(i8, ep_sq) - 8 * pawn_direction);
+                const ep_resolved_check = if (checker_sq) |sq| sq == captured_sq else true;
+                if (ep_att != 0 and ep_resolved_check) {
+                    const occ_after = (all_pieces_bb ^ from_bb ^ (@as(u64, 1) << captured_sq)) | (@as(u64, 1) << ep_sq);
+                    const opp_rook_queen = (self.bbs[@intFromEnum(PieceType.Rook) + opp_color_offset] | self.bbs[@intFromEnum(PieceType.Queen) + opp_color_offset]);
+                    const exposes_check = tables.lookupRookAttacks(king_sq, occ_after) & opp_rook_queen != 0;
+                    if (exposes_check == false) {
+                        move_list.appendAssumeCapacity(.{ .flags = MoveFlags.EP_CAPTURE, .from_sq = from_sq, .to_sq = ep_sq });
+                    }
                 }
             }
         }
 
-        var knights_bb = self.bbs[@intFromEnum(PieceType.Knight) + color_offset];
+        var knights_bb = self.bbs[@intFromEnum(PieceType.Knight) + color_offset] & ~pinned_pieces;
         while (knights_bb != 0) : (knights_bb &= knights_bb - 1) {
             const from_sq: u6 = @intCast(@ctz(knights_bb));
-            const att: Bitboard = tables.lookupKnightAttacks(from_sq) & ~ally_pieces_bb;
+            const att: Bitboard = tables.lookupKnightAttacks(from_sq) & ~ally_pieces_bb & check_mask;
 
             var quiet: Bitboard = att & ~opp_pieces_bb;
             var capture: Bitboard = att & opp_pieces_bb;
@@ -122,7 +221,12 @@ pub const Position = struct {
         var bishops_bb = self.bbs[@intFromEnum(PieceType.Bishop) + color_offset];
         while (bishops_bb != 0) : (bishops_bb &= bishops_bb - 1) {
             const from_sq: u6 = @intCast(@ctz(bishops_bb));
-            const att: Bitboard = tables.lookupBishopAttacks(from_sq, all_pieces_bb) & ~ally_pieces_bb;
+            var att: Bitboard = tables.lookupBishopAttacks(from_sq, all_pieces_bb) & ~ally_pieces_bb & check_mask;
+            if (pinned_pieces & @as(u64, 1) << from_sq != 0) {
+                const bishop_queen_pinning_bishop = bishop_queen_pinners & att;
+                if (bishop_queen_pinning_bishop == 0) continue;
+                att &= tables.lookupSquaresBetween(@intCast(@ctz(bishop_queen_pinning_bishop)), king_sq) | bishop_queen_pinning_bishop;
+            }
 
             var quiet: Bitboard = att & ~opp_pieces_bb;
             var capture: Bitboard = att & opp_pieces_bb;
@@ -141,7 +245,12 @@ pub const Position = struct {
         var rooks_bb = self.bbs[@intFromEnum(PieceType.Rook) + color_offset];
         while (rooks_bb != 0) : (rooks_bb &= rooks_bb - 1) {
             const from_sq: u6 = @intCast(@ctz(rooks_bb));
-            const att: Bitboard = tables.lookupRookAttacks(from_sq, all_pieces_bb) & ~ally_pieces_bb;
+            var att: Bitboard = tables.lookupRookAttacks(from_sq, all_pieces_bb) & ~ally_pieces_bb & check_mask;
+            if (pinned_pieces & @as(u64, 1) << from_sq != 0) {
+                const rook_queen_pinning_rook = rook_queen_pinners & att;
+                if (rook_queen_pinning_rook == 0) continue;
+                att &= tables.lookupSquaresBetween(@intCast(@ctz(rook_queen_pinning_rook)), king_sq) | rook_queen_pinning_rook;
+            }
 
             var quiet: Bitboard = att & ~opp_pieces_bb;
             var capture: Bitboard = att & opp_pieces_bb;
@@ -160,7 +269,12 @@ pub const Position = struct {
         var queens_bb = self.bbs[@intFromEnum(PieceType.Queen) + color_offset];
         while (queens_bb != 0) : (queens_bb &= queens_bb - 1) {
             const from_sq: u6 = @intCast(@ctz(queens_bb));
-            const att: Bitboard = tables.lookupQueenAttacks(from_sq, all_pieces_bb) & ~ally_pieces_bb;
+            var att: Bitboard = tables.lookupQueenAttacks(from_sq, all_pieces_bb) & ~ally_pieces_bb & check_mask;
+            if (pinned_pieces & @as(u64, 1) << from_sq != 0) {
+                const pieces_pinning_queen = (rook_queen_pinners | bishop_queen_pinners) & att;
+                if (pieces_pinning_queen == 0) continue;
+                att &= tables.lookupSquaresBetween(@intCast(@ctz(pieces_pinning_queen)), king_sq) | pieces_pinning_queen;
+            }
 
             var quiet: Bitboard = att & ~opp_pieces_bb;
             var capture: Bitboard = att & opp_pieces_bb;
@@ -174,63 +288,6 @@ pub const Position = struct {
                 const to_sq: u6 = @intCast(@ctz(capture));
                 move_list.appendAssumeCapacity(.{ .flags = MoveFlags.CAPTURE, .from_sq = from_sq, .to_sq = to_sq });
             }
-        }
-
-        const from_sq: u6 = @intCast(@ctz(king_bb));
-        const att: Bitboard = tables.lookupKingAttacks(from_sq) & ~ally_pieces_bb & ~opp_attacks;
-
-        var quiet: Bitboard = att & ~opp_pieces_bb;
-        var capture: Bitboard = att & opp_pieces_bb;
-
-        while (quiet != 0) : (quiet &= quiet - 1) {
-            const to_sq: u6 = @intCast(@ctz(quiet));
-            move_list.appendAssumeCapacity(.{ .flags = MoveFlags.QUIET, .from_sq = from_sq, .to_sq = to_sq });
-        }
-
-        while (capture != 0) : (capture &= capture - 1) {
-            const to_sq: u6 = @intCast(@ctz(capture));
-            move_list.appendAssumeCapacity(.{ .flags = MoveFlags.CAPTURE, .from_sq = from_sq, .to_sq = to_sq });
-        }
-
-        const wk_attacked = 0b111 << 4;
-        const wk_blocked = 0b11 << 5;
-        const wq_attacked = 0b111 << 2;
-        const wq_blocked = 0b111 << 1;
-        const bk_attacked = 0b111 << 60;
-        const bk_blocked = 0b11 << 61;
-        const bq_attacked = 0b111 << 58;
-        const bq_blocked = 0b111 << 57;
-
-        if (ally_color == Color.White and
-            self.board_state.castling_rights.white_kingside and
-            wk_attacked & opp_attacks == 0 and
-            wk_blocked & all_pieces_bb == 0)
-        {
-            move_list.appendAssumeCapacity(.{ .flags = MoveFlags.KING_CASTLE, .from_sq = from_sq, .to_sq = 6 });
-        }
-
-        if (ally_color == Color.White and
-            self.board_state.castling_rights.white_queenside and
-            wq_attacked & opp_attacks == 0 and
-            wq_blocked & all_pieces_bb == 0)
-        {
-            move_list.appendAssumeCapacity(.{ .flags = MoveFlags.QUEEN_CASTLE, .from_sq = from_sq, .to_sq = 2 });
-        }
-
-        if (ally_color == Color.Black and
-            self.board_state.castling_rights.black_kingside and
-            bk_attacked & opp_attacks == 0 and
-            bk_blocked & all_pieces_bb == 0)
-        {
-            move_list.appendAssumeCapacity(.{ .flags = MoveFlags.KING_CASTLE, .from_sq = from_sq, .to_sq = 62 });
-        }
-
-        if (ally_color == Color.Black and
-            self.board_state.castling_rights.black_queenside and
-            bq_attacked & opp_attacks == 0 and
-            bq_blocked & all_pieces_bb == 0)
-        {
-            move_list.appendAssumeCapacity(.{ .flags = MoveFlags.QUEEN_CASTLE, .from_sq = from_sq, .to_sq = 58 });
         }
     }
 };

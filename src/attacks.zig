@@ -106,20 +106,31 @@ pub fn pieceAttacks(color: Color, bbs: [12]Bitboard, occupancy: Bitboard) Bitboa
     return attacked;
 }
 
-pub fn isSquareAttackedByColor(square: u6, color: Color, bbs: [12]Bitboard, occupancy: Bitboard) bool {
-    const color_offset = if (color == Color.White) 0 else 6;
+pub fn squareAttackers(square: u6, color: Color, bbs: [12]Bitboard, occupancy: Bitboard) Bitboard {
+    const off: usize = if (color == .White) 0 else 6;
 
-    const ally_pawns = bbs[color_offset + @intFromEnum(PieceType.Pawn)];
-    const ally_knights = bbs[color_offset + @intFromEnum(PieceType.Knight)];
-    const ally_bishops_queens = bbs[color_offset + @intFromEnum(PieceType.Bishop)] | bbs[color_offset + @intFromEnum(PieceType.Queen)];
-    const ally_rooks_queens = bbs[color_offset + @intFromEnum(PieceType.Rook)] | bbs[color_offset + @intFromEnum(PieceType.Queen)];
-    const ally_kings = bbs[color_offset + @intFromEnum(PieceType.King)];
+    // Pawn attacks: look up attacks from square as the *opposite* color
+    const pawn_attackers = tables.lookupPawnAttacks(square, color.opp()) & bbs[off + @intFromEnum(PieceType.Pawn)];
+    const knight_attackers = tables.lookupKnightAttacks(square) & bbs[off + @intFromEnum(PieceType.Knight)];
+    const bishop_attacks = tables.lookupBishopAttacks(square, occupancy);
+    const rook_attacks = tables.lookupRookAttacks(square, occupancy);
+    const bq = bbs[off + @intFromEnum(PieceType.Bishop)] | bbs[off + @intFromEnum(PieceType.Queen)];
+    const rq = bbs[off + @intFromEnum(PieceType.Rook)] | bbs[off + @intFromEnum(PieceType.Queen)];
+    const king_attackers = tables.lookupKingAttacks(square) & bbs[off + @intFromEnum(PieceType.King)];
 
-    if (tables.lookupPawnAttacks(square, color.opp()) & ally_pawns) return true;
-    if (tables.lookupKnightAttacks(square) & ally_knights) return true;
-    if (tables.lookupBishopAttacks(square, occupancy) & ally_bishops_queens) return true;
-    if (tables.lookupRookAttacks(square, occupancy) & ally_rooks_queens) return true;
-    if (tables.lookupKingAttacks(square) & ally_kings) return true;
+    return pawn_attackers | knight_attackers | (bishop_attacks & bq) | (rook_attacks & rq) | king_attackers;
+}
 
-    return false;
+pub fn xRayRookAttacks(rook_sq: u6, occupancy: Bitboard, blockers: Bitboard) Bitboard {
+    var blockers_copy = blockers;
+    const attacks = tables.lookupRookAttacks(rook_sq, occupancy);
+    blockers_copy &= attacks;
+    return attacks ^ tables.lookupRookAttacks(rook_sq, occupancy ^ blockers_copy);
+}
+
+pub fn xRayBishopAttacks(bishop_sq: u6, occupancy: Bitboard, blockers: Bitboard) Bitboard {
+    var blockers_copy = blockers;
+    const attacks = tables.lookupBishopAttacks(bishop_sq, occupancy);
+    blockers_copy &= attacks;
+    return attacks ^ tables.lookupBishopAttacks(bishop_sq, occupancy ^ blockers_copy);
 }
