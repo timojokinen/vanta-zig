@@ -12,6 +12,7 @@ const utils = @import("utils.zig");
 const printBitboard = utils.printBitboard;
 const Color = utils.Color;
 const Bitboard = utils.Bitboard;
+const CastlingRights = @import("fen.zig").CastlingRights;
 const enumerateBitboard = utils.enumerateBitboard;
 
 pub fn boardStateToPieceBitboards(board_state: BoardState) [12]Bitboard {
@@ -35,11 +36,113 @@ pub fn createPositionFromFEN(fen: []const u8) !Position {
     return pos;
 }
 
+pub const UndoInfo = struct {
+    captured_piece: ?PieceType,
+    castling_rights: CastlingRights,
+    en_passant_square: ?u6,
+    half_move_clock: u32,
+};
+
 pub const Position = struct {
     board_state: BoardState,
     bbs: [12]Bitboard = .{0} ** 12,
+    undo_stack: [256]UndoInfo = undefined,
+    undo_index: u8 = 0,
 
-    pub fn generateMoves(self: Position) !void {
+    pub fn makeMove(self: *Position, move: Move) !void {
+        const piece_type: ?PieceType = self.pieceAt(move.from_sq);
+        if (piece_type == null) return error.InvalidMove;
+
+        const captured_piece_type = self.pieceAt(move.to_sq);
+        self.undo_stack[self.undo_index] = .{
+            .captured_piece = captured_piece_type,
+            .castling_rights = self.board_state.castling_rights,
+            .en_passant_square = self.board_state.en_passant_square,
+            .half_move_clock = self.board_state.halfmove_clock,
+        };
+        self.undo_index += 1;
+
+        const ally_color: Color = self.board_state.side_to_move;
+        const color_offset: usize = if (ally_color == Color.Black) 6 else 0;
+        const opp_color_offset: usize = if (ally_color == Color.Black) 0 else 6;
+
+        const from_bb: Bitboard = @as(u64, 1) << move.from_sq;
+        const to_bb: Bitboard = @as(u64, 1) << move.to_sq;
+        const from_to_bb: Bitboard = from_bb ^ to_bb;
+
+        const move_flags: u4 = @intFromEnum(move.flags);
+        const is_capture = move_flags & 0b0100 != 0;
+        const is_promotion = move_flags & 0b1000 != 0;
+        const is_ep = move.flags == .EP_CAPTURE;
+        const is_castle = move.flags == .KING_CASTLE or move.flags == .QUEEN_CASTLE;
+
+        self.bbs[@intFromEnum(piece_type.?) + color_offset] ^= if (!is_promotion) from_to_bb else from_bb;
+
+        if (is_capture and !is_ep) {
+            if (captured_piece_type == null) return error.InvalidMove;
+            self.bbs[@intFromEnum(captured_piece_type.?) + opp_color_offset] ^= to_bb;
+        }
+
+        if (is_ep) {
+            self.bbs[@intFromEnum(PieceType.Pawn) + opp_color_offset] ^= @as(u64, 1) << self.board_state.en_passant_square.?;
+        }
+
+        if (is_promotion) {
+            const prom_piece: PieceType = switch (move.flags) {
+                .KNIGHT_PROMOTION, .KNIGHT_PROMOTION_CAPTURE => PieceType.Knight,
+                .BISHOP_PROMOTION, .BISHOP_PROMOTION_CAPTURE => PieceType.Bishop,
+                .ROOK_PROMOTION, .ROOK_PROMOTION_CAPTURE => PieceType.Rook,
+                .QUEEN_PROMOTION, .QUEEN_PROMOTION_CAPTURE => PieceType.Queen,
+                else => unreachable,
+            };
+            self.bbs[@intFromEnum(prom_piece) + color_offset] |= to_bb;
+        }
+
+        if (is_castle) {
+            const relative_sq: u6 = if (ally_color == .Black) 56 else 0;
+            self.bbs[@intFromEnum(PieceType.Rook) + color_offset] ^= switch (move.flags) {
+                .KING_CASTLE => @as(u64, 1) << (7 + relative_sq) | @as(u64, 1) << (5 + relative_sq),
+                .QUEEN_CASTLE => @as(u64, 1) << (3 + relative_sq) | @as(u64, 1) << (0 + relative_sq),
+                else => unreachable,
+            };
+        }
+
+        if (move.from_sq == 4 or move.from_sq == 7 or move.to_sq == 7) self.board_state.castling_rights.white_kingside = false;
+        if (move.from_sq == 4 or move.from_sq == 0 or move.to_sq == 0) self.board_state.castling_rights.white_queenside = false;
+        if (move.from_sq == 60 or move.from_sq == 63 or move.to_sq == 63) self.board_state.castling_rights.black_kingside = false;
+        if (move.from_sq == 60 or move.from_sq == 56 or move.to_sq == 56) self.board_state.castling_rights.black_queenside = false;
+
+        if (move.flags == .DOUBLE_PAWN_PUSH) {
+            self.board_state.en_passant_square = move.to_sq - 8;
+        } else {
+            self.board_state.en_passant_square = null;
+        }
+
+        if (is_capture or piece_type.? == .Pawn) {
+            self.board_state.halfmove_clock = 0;
+        } else {
+            self.board_state.halfmove_clock += 1;
+        }
+
+        if (ally_color == .Black) self.board_state.fullmove_number += 1;
+
+        self.board_state.side_to_move = ally_color.opp();
+    }
+
+    // pub fn unmakeMove(self: Position, move: Move) void {
+    //     self.undo_index -= 1;
+    //     const undo = self.undo_stack[self.undo_index];
+    //     self.board_state.castling_rights = undo.castling_rights;
+    //     self.board_state.en_passant_square = undo.en_passant_square;
+    //     self.board_state.halfmove_clock = undo.half_move_clock;
+    // }
+
+    pub fn pieceAt(self: Position, sq: u6) ?PieceType {
+        const piece_bb = @as(u64, 1) << sq;
+        return if ((self.bbs[@intFromEnum(PieceType.Pawn)] | self.bbs[@intFromEnum(PieceType.Pawn) + 6]) & piece_bb != 0) PieceType.Pawn else if ((self.bbs[@intFromEnum(PieceType.Knight)] | self.bbs[@intFromEnum(PieceType.Knight) + 6]) & piece_bb != 0) PieceType.Knight else if ((self.bbs[@intFromEnum(PieceType.Bishop)] | self.bbs[@intFromEnum(PieceType.Bishop) + 6]) & piece_bb != 0) PieceType.Bishop else if ((self.bbs[@intFromEnum(PieceType.Rook)] | self.bbs[@intFromEnum(PieceType.Rook) + 6]) & piece_bb != 0) PieceType.Rook else if ((self.bbs[@intFromEnum(PieceType.Queen)] | self.bbs[@intFromEnum(PieceType.Queen) + 6]) & piece_bb != 0) PieceType.Queen else if ((self.bbs[@intFromEnum(PieceType.King)] | self.bbs[@intFromEnum(PieceType.King) + 6]) & piece_bb != 0) PieceType.King else null;
+    }
+
+    pub fn generateMoves(self: Position, move_list_buf: *[256]Move) !usize {
         const ally_color: Color = self.board_state.side_to_move;
         const color_offset: usize = if (ally_color == Color.Black) 6 else 0;
         const opp_color_offset: usize = if (ally_color == Color.Black) 0 else 6;
@@ -52,8 +155,9 @@ pub const Position = struct {
         const king_attackers: Bitboard = attacks.squareAttackers(king_sq, ally_color.opp(), self.bbs, all_pieces_bb);
         const checkers_count = @popCount(king_attackers);
 
-        var move_list_buf: [256]Move = undefined;
-        var move_list: std.ArrayListUnmanaged(Move) = .initBuffer(&move_list_buf);
+        printBitboard(all_pieces_bb);
+
+        var move_list: std.ArrayListUnmanaged(Move) = .initBuffer(move_list_buf);
 
         {
             const att: Bitboard = tables.lookupKingAttacks(king_sq) & ~ally_pieces_bb & ~opp_attacks;
@@ -113,7 +217,7 @@ pub const Position = struct {
             }
         }
 
-        if (checkers_count >= 2) return;
+        if (checkers_count >= 2) return move_list.items.len;
 
         const rook_queen_pinners = attacks.xRayRookAttacks(@intCast(@ctz(king_bb)), all_pieces_bb, ally_pieces_bb) & (self.bbs[@intFromEnum(PieceType.Queen) + opp_color_offset] | self.bbs[@intFromEnum(PieceType.Rook) + opp_color_offset]);
         const bishop_queen_pinners = attacks.xRayBishopAttacks(@intCast(@ctz(king_bb)), all_pieces_bb, ally_pieces_bb) & (self.bbs[@intFromEnum(PieceType.Queen) + opp_color_offset] | self.bbs[@intFromEnum(PieceType.Bishop) + opp_color_offset]);
@@ -160,11 +264,11 @@ pub const Position = struct {
                     move_list.appendAssumeCapacity(.{ .flags = MoveFlags.QUEEN_PROMOTION, .to_sq = to_sq, .from_sq = from_sq });
                 } else {
                     move_list.appendAssumeCapacity(.{ .flags = MoveFlags.QUIET, .to_sq = to_sq, .from_sq = from_sq });
-                }
 
-                to_sq = @intCast(@as(i8, to_sq) + 8 * pawn_direction);
-                if (@as(u64, 1) << to_sq & ~all_pieces_bb & pin_mask & check_mask != 0 and from_bb & utils.relativeRank(1, ally_color) != 0) {
-                    move_list.appendAssumeCapacity(.{ .flags = MoveFlags.DOUBLE_PAWN_PUSH, .from_sq = from_sq, .to_sq = to_sq });
+                    to_sq = @intCast(@as(i8, to_sq) + 8 * pawn_direction);
+                    if (@as(u64, 1) << to_sq & ~all_pieces_bb & pin_mask & check_mask != 0 and from_bb & utils.relativeRank(1, ally_color) != 0) {
+                        move_list.appendAssumeCapacity(.{ .flags = MoveFlags.DOUBLE_PAWN_PUSH, .from_sq = from_sq, .to_sq = to_sq });
+                    }
                 }
             }
 
@@ -289,5 +393,7 @@ pub const Position = struct {
                 move_list.appendAssumeCapacity(.{ .flags = MoveFlags.CAPTURE, .from_sq = from_sq, .to_sq = to_sq });
             }
         }
+
+        return move_list.items.len;
     }
 };
