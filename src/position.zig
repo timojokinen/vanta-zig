@@ -113,7 +113,7 @@ pub const Position = struct {
         if (move.from_sq == 60 or move.from_sq == 56 or move.to_sq == 56) self.board_state.castling_rights.black_queenside = false;
 
         if (move.flags == .DOUBLE_PAWN_PUSH) {
-            self.board_state.en_passant_square = move.to_sq - 8;
+            self.board_state.en_passant_square = if (ally_color == .White) move.to_sq - 8 else move.to_sq + 8;
         } else {
             self.board_state.en_passant_square = null;
         }
