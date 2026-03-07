@@ -9,7 +9,7 @@ pub fn pawnEastAttack(sq: u6, color: Color) Bitboard {
     const occ = @as(u64, 1) << sq;
     return switch (color) {
         Color.White => (occ << 9) & ~FILES[0],
-        Color.Black => (occ >> 7) & ~FILES[7],
+        Color.Black => (occ >> 7) & ~FILES[0],
     };
 }
 
@@ -17,7 +17,7 @@ pub fn pawnWestAttack(sq: u6, color: Color) Bitboard {
     const occ = @as(u64, 1) << sq;
     return switch (color) {
         Color.White => (occ << 7) & ~FILES[7],
-        Color.Black => (occ >> 9) & ~FILES[0],
+        Color.Black => (occ >> 9) & ~FILES[7],
     };
 }
 

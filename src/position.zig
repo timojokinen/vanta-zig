@@ -84,7 +84,7 @@ pub const Position = struct {
         }
 
         if (is_ep) {
-            const captured_pawn_sq: u6 = if (ally_color == .White) self.board_state.en_passant_square.? + 8 else self.board_state.en_passant_square.? - 8;
+            const captured_pawn_sq: u6 = if (ally_color == .White) self.board_state.en_passant_square.? - 8 else self.board_state.en_passant_square.? + 8;
             self.bbs[@intFromEnum(PieceType.Pawn) + opp_color_offset] ^= @as(u64, 1) << captured_pawn_sq;
         }
 
@@ -168,7 +168,7 @@ pub const Position = struct {
         }
 
         if (is_ep) {
-            const captured_pawn_sq: u6 = if (ally_color == .White) undo.en_passant_square.? + 8 else undo.en_passant_square.? - 8;
+            const captured_pawn_sq: u6 = if (ally_color == .White) undo.en_passant_square.? - 8 else undo.en_passant_square.? + 8;
             self.bbs[@intFromEnum(PieceType.Pawn) + opp_color_offset] ^= @as(u64, 1) << captured_pawn_sq;
         }
 
@@ -289,15 +289,22 @@ pub const Position = struct {
 
         while (pawns_bb != 0) : (pawns_bb &= pawns_bb - 1) {
             const from_sq: u6 = @intCast(@ctz(pawns_bb));
+            const from_bb: Bitboard = @as(u64, 1) << from_sq;
             const raw_att: Bitboard = tables.lookupPawnAttacks(from_sq, ally_color);
             const is_pinned: bool = pinned_pieces & @as(u64, 1) << from_sq != 0;
-            const pawn_rook_att = tables.lookupRookAttacks(from_sq, all_pieces_bb);
-            const pawn_bishop_att = tables.lookupBishopAttacks(from_sq, all_pieces_bb);
-            const rook_pinner = pawn_rook_att & rook_queen_pinners;
-            const bishop_pinner = pawn_bishop_att & bishop_queen_pinners;
-            const pin_mask = if (!is_pinned) ~@as(Bitboard, 0) else if (rook_pinner != 0) tables.lookupSquaresBetween(king_sq, @intCast(@ctz(rook_pinner))) | rook_pinner else if (bishop_pinner != 0) tables.lookupSquaresBetween(king_sq, @intCast(@ctz(bishop_pinner))) | bishop_pinner else 0;
+            var pin_mask: Bitboard = ~@as(Bitboard, 0);
+            if (is_pinned) {
+                var pot_pinners: Bitboard = bishop_queen_pinners | rook_queen_pinners;
+                while (pot_pinners != 0) : (pot_pinners &= pot_pinners - 1) {
+                    const pot_pinner: u6 = @intCast(@ctz(pot_pinners));
+                    const pinner_ray: Bitboard = tables.lookupSquaresBetween(king_sq, pot_pinner) | @as(u64, 1) << pot_pinner;
+                    if (pinner_ray & from_bb != 0) {
+                        pin_mask &= pinner_ray;
+                        continue;
+                    }
+                }
+            }
 
-            const from_bb: Bitboard = @as(u64, 1) << from_sq;
             var to_sq: u6 = @intCast(@as(i8, from_sq) + 8 * pawn_direction);
             const to_bb: Bitboard = @as(u64, 1) << to_sq;
 
@@ -309,11 +316,13 @@ pub const Position = struct {
                     move_list.appendAssumeCapacity(.{ .flags = MoveFlags.QUEEN_PROMOTION, .to_sq = to_sq, .from_sq = from_sq });
                 } else {
                     move_list.appendAssumeCapacity(.{ .flags = MoveFlags.QUIET, .to_sq = to_sq, .from_sq = from_sq });
+                }
+            }
 
-                    to_sq = @intCast(@as(i8, to_sq) + 8 * pawn_direction);
-                    if (@as(u64, 1) << to_sq & ~all_pieces_bb & pin_mask & check_mask != 0 and from_bb & utils.relativeRank(1, ally_color) != 0) {
-                        move_list.appendAssumeCapacity(.{ .flags = MoveFlags.DOUBLE_PAWN_PUSH, .from_sq = from_sq, .to_sq = to_sq });
-                    }
+            if (to_bb & ~all_pieces_bb != 0) {
+                to_sq = @intCast(@as(i8, to_sq) + 8 * pawn_direction);
+                if (@as(u64, 1) << to_sq & ~all_pieces_bb & pin_mask & check_mask != 0 and from_bb & utils.relativeRank(1, ally_color) != 0) {
+                    move_list.appendAssumeCapacity(.{ .flags = MoveFlags.DOUBLE_PAWN_PUSH, .from_sq = from_sq, .to_sq = to_sq });
                 }
             }
 
@@ -394,13 +403,23 @@ pub const Position = struct {
         var rooks_bb = self.bbs[@intFromEnum(PieceType.Rook) + color_offset];
         while (rooks_bb != 0) : (rooks_bb &= rooks_bb - 1) {
             const from_sq: u6 = @intCast(@ctz(rooks_bb));
-            var att: Bitboard = tables.lookupRookAttacks(from_sq, all_pieces_bb) & ~ally_pieces_bb & check_mask;
-            if (pinned_pieces & @as(u64, 1) << from_sq != 0) {
-                const rook_queen_pinning_rook = rook_queen_pinners & att;
-                if (rook_queen_pinning_rook == 0) continue;
-                att &= tables.lookupSquaresBetween(@intCast(@ctz(rook_queen_pinning_rook)), king_sq) | rook_queen_pinning_rook;
+            const from_bb: Bitboard = @as(u64, 1) << from_sq;
+            const raw_att: Bitboard = tables.lookupRookAttacks(from_sq, all_pieces_bb);
+            var pin_mask: Bitboard = ~@as(Bitboard, 0);
+
+            if (pinned_pieces & from_bb != 0) {
+                var pot_pinners: Bitboard = rook_queen_pinners | bishop_queen_pinners;
+                while (pot_pinners != 0) : (pot_pinners &= pot_pinners - 1) {
+                    const pot_pinner: u6 = @intCast(@ctz(pot_pinners));
+                    const pinner_ray: Bitboard = tables.lookupSquaresBetween(king_sq, pot_pinner) | @as(u64, 1) << pot_pinner;
+                    if (pinner_ray & from_bb != 0) {
+                        pin_mask &= pinner_ray;
+                        continue;
+                    }
+                }
             }
 
+            const att: Bitboard = raw_att & ~ally_pieces_bb & check_mask & pin_mask;
             var quiet: Bitboard = att & ~opp_pieces_bb;
             var capture: Bitboard = att & opp_pieces_bb;
 
@@ -418,12 +437,23 @@ pub const Position = struct {
         var queens_bb = self.bbs[@intFromEnum(PieceType.Queen) + color_offset];
         while (queens_bb != 0) : (queens_bb &= queens_bb - 1) {
             const from_sq: u6 = @intCast(@ctz(queens_bb));
-            var att: Bitboard = tables.lookupQueenAttacks(from_sq, all_pieces_bb) & ~ally_pieces_bb & check_mask;
-            if (pinned_pieces & @as(u64, 1) << from_sq != 0) {
-                const pieces_pinning_queen = (rook_queen_pinners | bishop_queen_pinners) & att;
-                if (pieces_pinning_queen == 0) continue;
-                att &= tables.lookupSquaresBetween(@intCast(@ctz(pieces_pinning_queen)), king_sq) | pieces_pinning_queen;
+            const from_bb: Bitboard = @as(u64, 1) << from_sq;
+            const raw_att: Bitboard = tables.lookupQueenAttacks(from_sq, all_pieces_bb);
+            var pin_mask: Bitboard = ~@as(Bitboard, 0);
+
+            if (pinned_pieces & from_bb != 0) {
+                var pot_pinners: Bitboard = bishop_queen_pinners | rook_queen_pinners;
+                while (pot_pinners != 0) : (pot_pinners &= pot_pinners - 1) {
+                    const pot_pinner: u6 = @intCast(@ctz(pot_pinners));
+                    const pinner_ray: Bitboard = tables.lookupSquaresBetween(king_sq, pot_pinner) | @as(u64, 1) << pot_pinner;
+                    if (pinner_ray & from_bb != 0) {
+                        pin_mask &= pinner_ray;
+                        continue;
+                    }
+                }
             }
+
+            const att: Bitboard = raw_att & ~ally_pieces_bb & check_mask & pin_mask;
 
             var quiet: Bitboard = att & ~opp_pieces_bb;
             var capture: Bitboard = att & opp_pieces_bb;

@@ -1,10 +1,10 @@
 const std = @import("std");
-// const attacks = @import("attacks.zig");
+const attacks = @import("attacks.zig");
 const tables = @import("tables.zig");
 // const Move = @import("move.zig").Move;
 
 // const fen = @import("fen.zig");
-// const utils = @import("utils.zig");
+const utils = @import("utils.zig");
 // const Position = @import("position.zig").Position;
 // const createPositionFromFEN = @import("position.zig").createPositionFromFEN;
 // const Color = utils.Color;
@@ -41,5 +41,10 @@ pub fn main() !void {
     //     try position.unmakeMove(move);
     // }
 
-    _ = try perft(5);
+    // for (1..5) |depth| {
+    _ = try perft(7);
+    // utils.printBitboard(@as(u64, 1) << 54);
+    // utils.printBitboard(attacks.pawnAttacks(54, .Black));
+    // _ = attacks.pawnAttacks(54, .Black);
+    // }
 }
