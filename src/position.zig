@@ -63,8 +63,8 @@ pub const Position = struct {
         self.undo_index += 1;
 
         const ally_color: Color = self.board_state.side_to_move;
-        const color_offset: usize = if (ally_color == Color.Black) 6 else 0;
-        const opp_color_offset: usize = if (ally_color == Color.Black) 0 else 6;
+        const color_offset: u4 = if (ally_color == Color.Black) 6 else 0;
+        const opp_color_offset: u4 = if (ally_color == Color.Black) 0 else 6;
 
         const from_bb: Bitboard = @as(u64, 1) << move.from_sq;
         const to_bb: Bitboard = @as(u64, 1) << move.to_sq;
@@ -84,7 +84,8 @@ pub const Position = struct {
         }
 
         if (is_ep) {
-            self.bbs[@intFromEnum(PieceType.Pawn) + opp_color_offset] ^= @as(u64, 1) << self.board_state.en_passant_square.?;
+            const captured_pawn_sq: u6 = if (ally_color == .White) self.board_state.en_passant_square.? + 8 else self.board_state.en_passant_square.? - 8;
+            self.bbs[@intFromEnum(PieceType.Pawn) + opp_color_offset] ^= @as(u64, 1) << captured_pawn_sq;
         }
 
         if (is_promotion) {
@@ -129,13 +130,59 @@ pub const Position = struct {
         self.board_state.side_to_move = ally_color.opp();
     }
 
-    // pub fn unmakeMove(self: Position, move: Move) void {
-    //     self.undo_index -= 1;
-    //     const undo = self.undo_stack[self.undo_index];
-    //     self.board_state.castling_rights = undo.castling_rights;
-    //     self.board_state.en_passant_square = undo.en_passant_square;
-    //     self.board_state.halfmove_clock = undo.half_move_clock;
-    // }
+    pub fn unmakeMove(self: *Position, move: Move) !void {
+        self.undo_index -= 1;
+        const undo = self.undo_stack[self.undo_index];
+        self.board_state.castling_rights = undo.castling_rights;
+        self.board_state.en_passant_square = undo.en_passant_square;
+        self.board_state.halfmove_clock = undo.half_move_clock;
+
+        const piece_type = self.pieceAt(move.to_sq);
+        if (piece_type == null) return error.InvalidMove;
+
+        const opp_color = self.board_state.side_to_move;
+        const ally_color = opp_color.opp();
+        const color_offset: u4 = if (ally_color == .Black) 6 else 0;
+        const opp_color_offset: u4 = if (ally_color == .Black) 0 else 6;
+        self.board_state.side_to_move = ally_color;
+
+        const to_bb: Bitboard = @as(u64, 1) << move.to_sq;
+        const from_bb: Bitboard = @as(u64, 1) << move.from_sq;
+        const from_to_bb: Bitboard = to_bb ^ from_bb;
+
+        const move_flags: u4 = @intFromEnum(move.flags);
+        const is_capture = move_flags & 0b0100 != 0;
+        const is_promotion = move_flags & 0b1000 != 0;
+        const is_ep = move.flags == .EP_CAPTURE;
+        const is_castle = move.flags == .KING_CASTLE or move.flags == .QUEEN_CASTLE;
+
+        if (!is_promotion) {
+            self.bbs[@intFromEnum(piece_type.?) + color_offset] ^= from_to_bb;
+        } else {
+            self.bbs[@intFromEnum(piece_type.?) + color_offset] ^= to_bb;
+            self.bbs[@intFromEnum(PieceType.Pawn) + color_offset] |= from_bb;
+        }
+
+        if (is_capture and !is_ep) {
+            self.bbs[@intFromEnum(undo.captured_piece.?) + opp_color_offset] ^= to_bb;
+        }
+
+        if (is_ep) {
+            const captured_pawn_sq: u6 = if (ally_color == .White) undo.en_passant_square.? + 8 else undo.en_passant_square.? - 8;
+            self.bbs[@intFromEnum(PieceType.Pawn) + opp_color_offset] ^= @as(u64, 1) << captured_pawn_sq;
+        }
+
+        if (is_castle) {
+            const relative_sq: u6 = if (ally_color == .Black) 56 else 0;
+            self.bbs[@intFromEnum(PieceType.Rook) + color_offset] ^= switch (move.flags) {
+                .KING_CASTLE => @as(u64, 1) << (7 + relative_sq) | @as(u64, 1) << (5 + relative_sq),
+                .QUEEN_CASTLE => @as(u64, 1) << (3 + relative_sq) | @as(u64, 1) << (0 + relative_sq),
+                else => unreachable,
+            };
+        }
+
+        if (ally_color == .Black) self.board_state.fullmove_number -= 1;
+    }
 
     pub fn pieceAt(self: Position, sq: u6) ?PieceType {
         const piece_bb = @as(u64, 1) << sq;
@@ -154,8 +201,6 @@ pub const Position = struct {
         const opp_attacks: Bitboard = attacks.pieceAttacks(ally_color.opp(), self.bbs, all_pieces_bb ^ king_bb);
         const king_attackers: Bitboard = attacks.squareAttackers(king_sq, ally_color.opp(), self.bbs, all_pieces_bb);
         const checkers_count = @popCount(king_attackers);
-
-        printBitboard(all_pieces_bb);
 
         var move_list: std.ArrayListUnmanaged(Move) = .initBuffer(move_list_buf);
 

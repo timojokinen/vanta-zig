@@ -71,6 +71,12 @@ pub fn san2idx(san: []const u8) !u6 {
     return @intCast(rank_index * 8 + file_index);
 }
 
+pub fn idx2san(sq: u6) [2]u8 {
+    const file: u8 = 'a' + @as(u8, fileFromSquare(sq));
+    const rank: u8 = @as(u8, rankFromSquare(sq) + 1) + '0';
+    return .{ file, rank };
+}
+
 pub const FILES: [8]u64 = .{
     0x0101010101010101,
     0x202020202020202,
