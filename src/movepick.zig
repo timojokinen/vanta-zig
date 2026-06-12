@@ -6,10 +6,14 @@ const MoveFlags = @import("move.zig").MoveFlags;
 const MoveList = @import("move.zig").MoveList;
 const Searcher = @import("search.zig").Searcher;
 
-pub fn scoreMoves(position: *Position, move_list: *MoveList, pv_move: ?Move) void {
+pub fn scoreMoves(position: *Position, move_list: *MoveList, hash_move: ?Move, pv_move: ?Move) void {
     for (move_list.moves[0..move_list.count]) |*scored_move| {
+        if (hash_move) |hm| {
+            if (hm.toU16() == scored_move.move.toU16()) scored_move.score += 30_000;
+        }
+
         if (pv_move) |pv| {
-            if (pv.toU16() == scored_move.move.toU16()) scored_move.score += 30_000;
+            if (pv.toU16() == scored_move.move.toU16()) scored_move.score += 3_000;
         }
 
         const flags = @intFromEnum(scored_move.move.flags);

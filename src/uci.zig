@@ -7,6 +7,10 @@ const perft = @import("perft.zig").perft;
 const Move = @import("move.zig").Move;
 const MoveList = @import("move.zig").MoveList;
 const MoveFlags = @import("move.zig").MoveFlags;
+const TranspositionTable = @import("tt.zig").TranspositionTable;
+const TTEntry = @import("tt.zig").TTEntry;
+
+const DEFAULT_TT_SIZE_MB = 16;
 
 const SupportedCommands = enum {
     uci,
@@ -69,7 +73,12 @@ fn applyUciMove(position: *Position, move_str: []const u8) !void {
     return error.MoveNotFound;
 }
 
-pub fn uciInterface(io: std.Io) !void {
+fn mb_to_tt_size(mb: usize) usize {
+    const requested_size_in_bit = mb * 1024 * 1024 / @sizeOf(TTEntry);
+    return @as(u64, 1) << @as(u6, @intCast(63 - @clz(requested_size_in_bit)));
+}
+
+pub fn uciInterface(io: std.Io, allocator: std.mem.Allocator) !void {
     var stdout_buf: [1024]u8 = undefined;
     var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buf);
     const stdout: *std.Io.Writer = &stdout_writer.interface;
@@ -79,9 +88,12 @@ pub fn uciInterface(io: std.Io) !void {
     const stdin: *std.Io.Reader = &stdin_reader.interface;
 
     const startpos_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
     var position: Position = try createPositionFromFEN(startpos_fen);
 
-    var searcher: Searcher = .{};
+    const tt_size = mb_to_tt_size(DEFAULT_TT_SIZE_MB);
+    var tt: TranspositionTable = try .init(allocator, tt_size);
+    var searcher: Searcher = .{ .allocator = allocator, .tt = &tt };
 
     while (true) {
         defer stdout.flush() catch {};
@@ -97,7 +109,7 @@ pub fn uciInterface(io: std.Io) !void {
         switch (cmd) {
             .quit => break,
             .uci => {
-                try stdout.writeAll("id name Vanta\n");
+                try stdout.writeAll("id name Zaraki\n");
                 try stdout.writeAll("id author Timo Jokinen\n");
                 try stdout.writeAll("uciok\n");
             },

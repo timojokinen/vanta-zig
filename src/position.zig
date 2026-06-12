@@ -39,12 +39,7 @@ pub fn createPositionFromFEN(fen: []const u8) !Position {
     return pos;
 }
 
-pub const UndoInfo = struct {
-    captured_piece: ?PieceType,
-    castling_rights: CastlingRights,
-    en_passant_square: ?u6,
-    half_move_clock: u32,
-};
+pub const UndoInfo = struct { captured_piece: ?PieceType, castling_rights: CastlingRights, en_passant_square: ?u6, half_move_clock: u32, hash: u64 };
 
 pub const Position = struct {
     board_state: BoardState,
@@ -88,6 +83,7 @@ pub const Position = struct {
             .castling_rights = self.board_state.castling_rights,
             .en_passant_square = self.board_state.en_passant_square,
             .half_move_clock = self.board_state.halfmove_clock,
+            .hash = self.hash,
         };
         self.undo_index += 1;
 
@@ -105,16 +101,21 @@ pub const Position = struct {
         const is_ep = move.flags == .EP_CAPTURE;
         const is_castle = move.flags == .KING_CASTLE or move.flags == .QUEEN_CASTLE;
 
-        self.bbs[@intFromEnum(piece_type.?) + color_offset] ^= if (!is_promotion) from_to_bb else from_bb;
+        var piece_sqs = if (!is_promotion) from_to_bb else from_bb;
+        self.bbs[@intFromEnum(piece_type.?) + color_offset] ^= piece_sqs;
+        while (piece_sqs != 0) : (piece_sqs &= piece_sqs - 1)
+            self.hash ^= zobrist.piece_keys[@intFromEnum(piece_type.?) + color_offset][@ctz(piece_sqs)];
 
         if (is_capture and !is_ep) {
             if (captured_piece_type == null) return error.InvalidMove;
             self.bbs[@intFromEnum(captured_piece_type.?) + opp_color_offset] ^= to_bb;
+            self.hash ^= zobrist.piece_keys[@intFromEnum(captured_piece_type.?) + opp_color_offset][move.to_sq];
         }
 
         if (is_ep) {
             const captured_pawn_sq: u6 = if (ally_color == .White) self.board_state.en_passant_square.? - 8 else self.board_state.en_passant_square.? + 8;
             self.bbs[@intFromEnum(PieceType.Pawn) + opp_color_offset] ^= @as(u64, 1) << captured_pawn_sq;
+            self.hash ^= zobrist.piece_keys[@intFromEnum(PieceType.Pawn) + opp_color_offset][captured_pawn_sq];
         }
 
         if (is_promotion) {
@@ -126,24 +127,36 @@ pub const Position = struct {
                 else => unreachable,
             };
             self.bbs[@intFromEnum(prom_piece) + color_offset] |= to_bb;
+            self.hash ^= zobrist.piece_keys[@intFromEnum(prom_piece) + color_offset][move.to_sq];
         }
 
         if (is_castle) {
             const relative_sq: u6 = if (ally_color == .Black) 56 else 0;
-            self.bbs[@intFromEnum(PieceType.Rook) + color_offset] ^= switch (move.flags) {
+            var rook_sqs = switch (move.flags) {
                 .KING_CASTLE => @as(u64, 1) << (7 + relative_sq) | @as(u64, 1) << (5 + relative_sq),
                 .QUEEN_CASTLE => @as(u64, 1) << (3 + relative_sq) | @as(u64, 1) << (0 + relative_sq),
                 else => unreachable,
             };
+            self.bbs[@intFromEnum(PieceType.Rook) + color_offset] ^= rook_sqs;
+
+            while (rook_sqs != 0) : (rook_sqs &= rook_sqs - 1)
+                self.hash ^= zobrist.piece_keys[@intFromEnum(PieceType.Rook) + color_offset][@ctz(rook_sqs)];
         }
 
+        self.hash ^= zobrist.castling_rights_keys[@as(u4, @bitCast(self.board_state.castling_rights))];
         if (move.from_sq == 4 or move.from_sq == 7 or move.to_sq == 7) self.board_state.castling_rights.white_kingside = false;
         if (move.from_sq == 4 or move.from_sq == 0 or move.to_sq == 0) self.board_state.castling_rights.white_queenside = false;
         if (move.from_sq == 60 or move.from_sq == 63 or move.to_sq == 63) self.board_state.castling_rights.black_kingside = false;
         if (move.from_sq == 60 or move.from_sq == 56 or move.to_sq == 56) self.board_state.castling_rights.black_queenside = false;
+        self.hash ^= zobrist.castling_rights_keys[@as(u4, @bitCast(self.board_state.castling_rights))];
 
+        if (self.board_state.en_passant_square) |old_ep| {
+            self.hash ^= zobrist.ep_keys[old_ep & 7];
+        }
         if (move.flags == .DOUBLE_PAWN_PUSH) {
-            self.board_state.en_passant_square = if (ally_color == .White) move.to_sq - 8 else move.to_sq + 8;
+            const new_ep = if (ally_color == .White) move.to_sq - 8 else move.to_sq + 8;
+            self.board_state.en_passant_square = new_ep;
+            self.hash ^= zobrist.ep_keys[new_ep & 7];
         } else {
             self.board_state.en_passant_square = null;
         }
@@ -156,7 +169,9 @@ pub const Position = struct {
 
         if (ally_color == .Black) self.board_state.fullmove_number += 1;
 
-        self.board_state.side_to_move = ally_color.opp();
+        const opp_color = ally_color.opp();
+        self.board_state.side_to_move = opp_color;
+        self.hash ^= zobrist.black_key;
     }
 
     pub fn unmakeMove(self: *Position, move: Move) !void {
@@ -165,6 +180,7 @@ pub const Position = struct {
         self.board_state.castling_rights = undo.castling_rights;
         self.board_state.en_passant_square = undo.en_passant_square;
         self.board_state.halfmove_clock = undo.half_move_clock;
+        self.hash = undo.hash;
 
         const piece_type = self.pieceAt(move.to_sq);
         if (piece_type == null) return error.InvalidMove;

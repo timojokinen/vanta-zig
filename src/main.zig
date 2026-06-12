@@ -13,5 +13,5 @@ pub fn main(init: std.process.Init) !void {
 
     initZobristKeys();
     initTables();
-    try uciInterface(init.io);
+    try uciInterface(init.io, init.gpa);
 }
